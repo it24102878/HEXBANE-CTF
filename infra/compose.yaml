@@ -1,0 +1,93 @@
+name: hexbane-dev
+
+services:
+  permissions:
+    image: alpine:3.23
+    user: "0:0"
+    network_mode: none
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - chown -R 1001:1001 /var/uploads /var/log/CTFd
+    volumes:
+      - ctfd_uploads:/var/uploads
+      - ctfd_logs:/var/log/CTFd
+
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ctfd
+      MARIADB_USER: ctfd
+      MARIADB_PASSWORD: ${DB_PASSWORD:?missing}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?missing}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=128M
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - backend
+    mem_limit: 640m
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+
+  cache:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    networks:
+      - backend
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ctfd:
+    image: ctfd/ctfd:3.8.8
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      SECRET_KEY: ${CTFD_SECRET_KEY:?missing}
+      DATABASE_URL: mysql+pymysql://ctfd:${DB_PASSWORD}@db/ctfd
+      REDIS_URL: redis://cache:6379
+      UPLOAD_FOLDER: /var/uploads
+      LOG_FOLDER: /var/log/CTFd
+      ACCESS_LOG: "-"
+      ERROR_LOG: "-"
+      WORKERS: "1"
+      REVERSE_PROXY: "false"
+    volumes:
+      - ctfd_uploads:/var/uploads
+      - ctfd_logs:/var/log/CTFd
+    depends_on:
+      permissions:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+    mem_limit: 900m
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  frontend:
+  backend:
+    internal: true
+
+volumes:
+  db_data:
+  ctfd_uploads:
+  ctfd_logs:
